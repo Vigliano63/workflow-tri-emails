@@ -16,7 +16,9 @@ from mistralai.workflows.testing import create_test_worker
 from worker.workflows import tri_emails
 from worker.workflows.tri_emails_outlook import (
     EmailOutlook,
+    EmailOutlookEnrichi,
     TriEmailsOutlookWorkflow,
+    _construire_rapport_html,
     _extraire_message_ids,
     _parse_tool_result,
 )
@@ -53,6 +55,20 @@ async def mock_ouvrir_email_outlook(message_id: str) -> EmailOutlook:
     )
 
 
+@workflows.activity(name="mon_adresse_outlook")
+async def mock_mon_adresse_outlook() -> str:
+    return "moi@exemple.fr"
+
+
+@workflows.activity(name="creer_brouillon_rapport")
+async def mock_creer_brouillon_rapport(
+    destinataire: str, sujet: str, corps_html: str
+) -> str:
+    assert destinataire == "moi@exemple.fr"
+    assert "Tri de vos emails" in corps_html
+    return "draft-123"
+
+
 def test_parse_tool_result_extrait_le_json_du_bloc_text() -> None:
     payload = {
         "results": {"a": {"metadata": {"message_id": "id-1"}}},
@@ -87,6 +103,40 @@ def test_extraire_message_ids_resultats_en_liste_et_vide() -> None:
     assert _extraire_message_ids({}) == []
 
 
+def _enrichi(
+    sujet: str, categorie: str, priorite: int, resume: str = "Res"
+) -> EmailOutlookEnrichi:
+    return EmailOutlookEnrichi(
+        sender="a@x.fr",
+        subject=sujet,
+        categorie=categorie,
+        resume=resume,
+        priorite=priorite,
+        message_id="m-1",
+        web_link="https://outlook.live.com/mail/0/inbox/m-1",
+    )
+
+
+def test_rapport_html_trie_par_priorite_desc() -> None:
+    rapport = _construire_rapport_html(
+        [_enrichi("faible", "NEWSLETTER", 1), _enrichi("urgent", "URGENT", 5)]
+    )
+    assert rapport.index("urgent") < rapport.index("faible")
+    assert "Tri de vos emails (2)" in rapport
+
+
+def test_rapport_html_echappe_le_html_et_contient_les_champs() -> None:
+    rapport = _construire_rapport_html(
+        [_enrichi("<script>alert(1)</script>", "SPAM", 1, "Résumé & <b>gras</b>")]
+    )
+    assert "<script>alert(1)</script>" not in rapport
+    assert "&lt;script&gt;" in rapport
+    assert "Résumé &amp; &lt;b&gt;gras&lt;/b&gt;" in rapport
+    assert "SPAM" in rapport
+    assert 'href="https://outlook.live.com/mail/0/inbox/m-1"' in rapport
+    assert "●○○○○" in rapport
+
+
 async def test_tri_emails_outlook_lit_et_classe(
     temporal_env: Any, mock_chat_parse: None
 ) -> None:
@@ -100,6 +150,8 @@ async def test_tri_emails_outlook_lit_et_classe(
         activities=[
             mock_rechercher_emails_outlook,
             mock_ouvrir_email_outlook,
+            mock_mon_adresse_outlook,
+            mock_creer_brouillon_rapport,
             tri_emails.classer_email,
         ],
     ):
@@ -121,6 +173,8 @@ async def test_tri_emails_outlook_lit_et_classe(
             assert email["priorite"] == 2
             assert email["message_id"].startswith("msg-")
             assert email["web_link"].startswith("https://outlook.live.com/")
+        assert result["brouillon_id"] == "draft-123"
+        assert "Tri de vos emails (2)" in result["rapport_html"]
 
 
 async def test_tri_emails_outlook_boite_vide(
