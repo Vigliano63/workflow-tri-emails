@@ -1,6 +1,7 @@
 """Tests du workflow `tri_emails_outlook` (connecteur Outlook et appel Mistral mockés)."""
 
 import asyncio
+import json
 from datetime import timedelta
 from typing import Any, Type, TypeVar
 
@@ -13,7 +14,12 @@ from mistralai.workflows.core.execution.concurrency._concurrency_workflow import
 from mistralai.workflows.testing import create_test_worker
 
 from worker.workflows import tri_emails
-from worker.workflows.tri_emails_outlook import EmailOutlook, TriEmailsOutlookWorkflow
+from worker.workflows.tri_emails_outlook import (
+    EmailOutlook,
+    TriEmailsOutlookWorkflow,
+    _extraire_message_ids,
+    _parse_tool_result,
+)
 
 EXECUTION_TIMEOUT = timedelta(seconds=30)
 
@@ -45,6 +51,40 @@ async def mock_ouvrir_email_outlook(message_id: str) -> EmailOutlook:
         body=f"Corps du message {message_id}",
         web_link=f"https://outlook.live.com/mail/0/inbox/{message_id}",
     )
+
+
+def test_parse_tool_result_extrait_le_json_du_bloc_text() -> None:
+    payload = {
+        "results": {"a": {"metadata": {"message_id": "id-1"}}},
+        "next_page_token": None,
+    }
+    dumped = {
+        "content": [{"type": "text", "text": json.dumps(payload)}],
+        "metadata": {},
+    }
+    assert _parse_tool_result(dumped) == payload
+
+
+def test_parse_tool_result_garde_le_dict_direct() -> None:
+    assert _parse_tool_result({"results": []}) == {"results": []}
+
+
+def test_extraire_message_ids_resultats_en_dict() -> None:
+    data = {
+        "results": {
+            "k1": {"metadata": {"message_id": "id-1"}},
+            "k2": {"metadata": {"message_id": "id-2"}},
+        }
+    }
+    assert sorted(_extraire_message_ids(data)) == ["id-1", "id-2"]
+
+
+def test_extraire_message_ids_resultats_en_liste_et_vide() -> None:
+    assert _extraire_message_ids(
+        {"results": [{"metadata": {"message_id": "id-9"}}]}
+    ) == ["id-9"]
+    assert _extraire_message_ids({"results": {}}) == []
+    assert _extraire_message_ids({}) == []
 
 
 async def test_tri_emails_outlook_lit_et_classe(
